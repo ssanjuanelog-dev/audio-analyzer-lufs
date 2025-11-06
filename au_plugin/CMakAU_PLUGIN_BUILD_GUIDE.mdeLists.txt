@@ -1,0 +1,379 @@
+# AudioAnalyzer AU Plugin - Complete Build & Integration Guide
+
+## Overview
+
+This guide provides comprehensive instructions for building the AudioAnalyzer as a professional Audio Unit (AU) plugin using JUCE framework. The plugin provides real-time audio analysis with LUFS metering, spectrum visualization, stereo analysis, and bass frequency tracking.
+
+## System Requirements
+
+### macOS
+- macOS 10.11 or later (deployment target)
+- Xcode 12.0 or later
+- Command Line Tools installed
+
+### Required Tools
+- Git
+- CMake 3.21 or later
+- JUCE Framework 7.0+ (https://github.com/juce-framework/JUCE)
+- Clang/LLVM (included with Xcode)
+
+### Optional Tools
+- Homebrew for package management
+- Ninja build system (faster than Unix Makefiles)
+
+## Installation Steps
+
+### Step 1: Clone JUCE Framework
+
+```bash
+git clone https://github.com/juce-framework/JUCE.git
+cd JUCE
+git checkout v7.0.0  # or latest stable version
+cd ..
+```
+
+### Step 2: Clone AudioAnalyzer Repository
+
+```bash
+git clone https://github.com/ssanjuanelog-dev/audio-analyzer-lufs.git
+cd audio-analyzer-lufs
+```
+
+### Step 3: Create Build Directory
+
+```bash
+mkdir -p au_plugin/build
+cd au_plugin/build
+```
+
+### Step 4: Configure with CMake
+
+```bash
+cmake .. -DJUCE_PATH=../../JUCE -DCMAKE_BUILD_TYPE=Release
+```
+
+For development builds with debug symbols:
+
+```bash
+cmake .. -DJUCE_PATH=../../JUCE -DCMAKE_BUILD_TYPE=Debug
+```
+
+### Step 5: Build AU Plugin
+
+```bash
+cmake --build . --config Release -- -j$(sysctl -n hw.ncpu)
+```
+
+For Xcode project generation:
+
+```bash
+cmake .. -G Xcode -DJUCE_PATH=../../JUCE
+open AudioAnalyzerAU.xcodeproj
+# Then build in Xcode
+```
+
+## File Structure
+
+```
+au_plugin/
+├── CMakeLists.txt                 # Build configuration
+├── source/
+│   ├── PluginProcessor.h/cpp      # AU processing core
+│   ├── PluginEditor.h/cpp         # AU GUI editor
+│   ├── analysis/
+│   │   ├── LUFSMeter.h/cpp        # ITU-R BS.1770-4 metering
+│   │   ├── SpectrumAnalyzer.h/cpp # FFT spectrum analysis
+│   │   ├── StereoAnalyzer.h/cpp   # Stereo correlation
+│   │   └── BassAnalyzer.h/cpp     # 5-band bass analysis
+│   ├── dsp/
+│   │   ├── FilterBank.h/cpp       # Multi-band filters
+│   │   └── WindowFunctions.h/cpp  # Windowing for FFT
+│   └── gui/
+│       ├── WaveformComponent.h/cpp # Waveform display
+│       ├── SpectrumComponent.h/cpp # Spectrum visualization
+│       ├── MetricsComponent.h/cpp  # Real-time metrics
+│       └── LookAndFeel.h/cpp       # Dark theme styling
+└── tests/
+    ├── LUFSMeterTest.cpp
+    ├── SpectrumAnalyzerTest.cpp
+    └── StereoAnalyzerTest.cpp
+```
+
+## C++ Implementation Details
+
+### PluginProcessor.h/cpp
+
+Core AU processing engine inheriting from juce::AudioProcessor:
+
+```cpp
+class PluginProcessor : public juce::AudioProcessor {
+public:
+    PluginProcessor();
+    ~PluginProcessor() override;
+    
+    // Audio processing
+    void prepareToPlay(double sampleRate, int samplesPerBlock) override;
+    void releaseResources() override;
+    void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
+    
+    // Analysis engine
+    void runAnalysis(juce::AudioBuffer<float>& buffer);
+    
+    // Parameter updates
+    juce::AudioProcessorValueTreeState& getValueTreeState();
+    
+private:
+    // Analysis modules
+    LUFSMeter lufs_meter;
+    SpectrumAnalyzer spectrum;
+    StereoAnalyzer stereo;
+    BassAnalyzer bass;
+    
+    // Parameter tree
+    juce::AudioProcessorValueTreeState parameters;
+};
+```
+
+### LUFSMeter Implementation
+
+Ports ITU-R BS.1770-4 standard from Python:
+
+```cpp
+class LUFSMeter {
+public:
+    void prepareToPlay(double sampleRate, int blockSize);
+    void processAudio(const float* audioData, int numSamples);
+    
+    // LUFS measurements
+    float getIntegratedLUFS() const;
+    float getShortTermLUFS() const;
+    float getMomentaryLUFS() const;
+    float getTruePeak() const;
+    
+private:
+    // Metering state
+    float integrated_loudness = 0.0f;
+    float short_term_loudness = 0.0f;
+    float momentary_loudness = 0.0f;
+    
+    // DSP components
+    HighPassFilter high_pass;
+    RelativeGatingFilter gating;
+};
+```
+
+### SpectrumAnalyzer Implementation
+
+Real-time FFT analysis with multiple scales:
+
+```cpp
+class SpectrumAnalyzer {
+public:
+    enum FrequencyScale { Linear, Logarithmic, Mel, Bark };
+    
+    void prepareToPlay(double sampleRate);
+    void processAudio(const float* audioData, int numSamples);
+    
+    // Spectrum data
+    const std::vector<float>& getSpectrum(FrequencyScale scale) const;
+    float getPeakFrequency() const;
+    
+    // Display settings
+    void setFrequencyScale(FrequencyScale scale);
+    void setPeakHold(bool enabled, float holdTime);
+    
+private:
+    juce::dsp::FFT fft;
+    std::vector<float> spectrum_linear;
+    std::vector<float> spectrum_log;
+};
+```
+
+### StereoAnalyzer Implementation
+
+Stereo correlation and phase analysis:
+
+```cpp
+class StereoAnalyzer {
+public:
+    struct StereoMetrics {
+        float correlation;
+        float phase_difference;  // degrees
+        float stereo_width;      // 0-1 scale
+        float mono_compatibility; // 0-100%
+    };
+    
+    void processAudio(const float* left, const float* right, int numSamples);
+    StereoMetrics getMetrics() const;
+    
+private:
+    StereoMetrics metrics;
+};
+```
+
+### BassAnalyzer Implementation
+
+5-band bass frequency analysis:
+
+```cpp
+class BassAnalyzer {
+public:
+    enum BassFrequencyBand {
+        SubBass,      // 20-60 Hz
+        DeepBass,     // 60-120 Hz
+        MidBass,      // 120-250 Hz
+        BassMid,      // 250-500 Hz
+        LowMid        // 500-1000 Hz
+    };
+    
+    struct BandAnalysis {
+        float level_db;
+        float rms;
+        float peak;
+        float crest_factor;
+    };
+    
+    void processAudio(const float* audioData, int numSamples);
+    BandAnalysis getBandAnalysis(BassFrequencyBand band) const;
+    
+private:
+    std::array<FilterBank, 5> bass_filters;
+};
+```
+
+## AU Plugin Parameters
+
+Parameter mapping (output-only for analysis results):
+
+```
+0-99:     LUFS Meters
+100-199:  Spectrum Display (50 bands)
+200-209:  Stereo Metrics
+210-214:  Bass Band Levels
+215-219:  Bass Buoyancy Classification
+220+:     Recommendations (text output)
+```
+
+## Installation
+
+### AU Plugin
+
+After building, install to system AU location:
+
+```bash
+cp -r build/AudioAnalyzerAU.component ~/Library/Audio/Plug-Ins/Components/
+
+# Validate installation
+auval -v auzr azar
+```
+
+### VST3 Plugin (Optional)
+
+```bash
+cp -r build/AudioAnalyzerAU_VST3.vst3 ~/Library/Audio/Plug-Ins/VST3/
+```
+
+## Testing in DAW
+
+### Logic Pro
+1. Open a project
+2. Add Audio Track
+3. Click on Insert -> Audio FX
+4. Find "AudioAnalyzer" in list
+5. Select and insert
+
+### Ableton Live
+1. Open project
+2. Create Audio Track
+3. Click "Audio From" and select "AudioAnalyzer"
+4. Plugin appears in FX rack
+
+### Pro Tools
+1. Create track
+2. Insert Plugin → Audio Unit → AudioAnalyzer
+3. Configure I/O settings
+
+## Troubleshooting
+
+### Plugin Not Appearing
+
+```bash
+# Clear AU cache
+rm -rf ~/Library/Caches/AudioUnitCache
+killall -9 coreaudiod
+
+# Rescan plugins
+auval -v auzr azar
+```
+
+### Build Errors
+
+1. **JUCE not found**: Ensure JUCE_PATH is correct
+2. **C++ 17 required**: Verify Xcode is updated
+3. **Deployment target**: Ensure macOS 10.11+ target
+
+### Performance Issues
+
+1. Reduce FFT size (512 samples)
+2. Enable fast math optimizations
+3. Profile with Instruments
+
+## Performance Targets
+
+- **CPU Usage**: <5% at 48kHz, 1024 block size
+- **Latency**: <10ms analysis latency
+- **FFT Resolution**: 1024-point FFT @ 44.1kHz
+- **LUFS Accuracy**: ±0.1 LU (ITU-R BS.1770-4)
+
+## Dependencies
+
+- JUCE Framework 7.0+ (Apache 2.0)
+- C++17 compiler
+- macOS 10.11 SDK
+
+## Deployment
+
+### Code Signing
+
+```bash
+codesign --force --verify --verbose --sign - \
+  ~/Library/Audio/Plug-Ins/Components/AudioAnalyzerAU.component
+```
+
+### Notarization
+
+For distribution outside App Store:
+
+```bash
+xcrun altool --notarize-app -f plugin.zip -t osx \
+  -u apple@email.com -p app-specific-password
+```
+
+## Build Optimization Flags
+
+```cmake
+# Release Build (Production)
+cmake .. -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_FLAGS_RELEASE="-O3 -march=native -ffast-math"
+
+# Debug Build (Development)
+cmake .. -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_CXX_FLAGS_DEBUG="-g -O0"
+```
+
+## References
+
+- JUCE Documentation: https://docs.juce.com/
+- AU Plugin Specifications: https://developer.apple.com/au/
+- ITU-R BS.1770-4 Standard: https://www.itu.int/rec/R-REC-BS.1770-4-201510-I/en
+
+## Support
+
+For issues or questions:
+1. Check GitHub Issues: https://github.com/ssanjuanelog-dev/audio-analyzer-lufs/issues
+2. Review JUCE Forums: https://forum.juce.com/
+3. Check AU Developer Documentation
+
+## License
+
+MIT License - See LICENSE file for details
